@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# git-wta: Create a worktree and copy .env files and node_modules via rsync
+# Usage:
+#   git wta <new-branch> [start-point]
+# or run directly if on PATH:
+#   git-wta <new-branch> [start-point]
+
+err() { printf "Error: %s\n" "$*" >&2; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || { err "Missing required command: $1"; exit 127; }
+}
+
+need_cmd git
+need_cmd rsync
+need_cmd find
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  err "This command must be run inside a Git repository."
+  exit 1
+fi
+
+if [[ ${1:-} == "" ]]; then
+  echo "Usage: git wta <new-branch> [start-point]" >&2
+  exit 2
+fi
+
+branch="$1"
+start_point="${2:-}"
+
+repo_root="$(git rev-parse --show-toplevel)"
+root_name="$(basename "$repo_root")"
+parent_dir="$(dirname "$repo_root")"
+
+# Destination follows rule: ../<root_dir_name><branch>
+dest_dir="$parent_dir/${root_name}-${branch}"
+
+if [[ -e "$dest_dir" ]]; then
+  err "Destination already exists: $dest_dir"
+  exit 1
+fi
+
+echo "Preparing worktree at: $dest_dir (branch: $branch)"
+
+# Prune any stale worktree registrations first (safe, no-op if none)
+git worktree prune >/dev/null 2>&1 || true
+
+# If current worktree is on the target branch, switch away (a branch
+# can be checked out in only one worktree at a time)
+current_branch="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$current_branch" == "$branch" ]]; then
+  default_base="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  default_base="${default_base#origin/}"
+  base_ref="${default_base:-main}"
+  git switch "$base_ref" 2>/dev/null \
+    || git switch -c "$base_ref" --track "origin/$base_ref" 2>/dev/null \
+    || git switch --detach
+fi
+
+# If the branch is already checked out in another active worktree, abort
+if git worktree list --porcelain | awk '/^branch /{print $2}' | grep -qx "refs/heads/$branch"; then
+  err "Branch '$branch' is already checked out in another worktree."
+  exit 1
+fi
+
+# Decide how to add the worktree: use existing local branch, or create it
+if git show-ref --verify --quiet "refs/heads/$branch"; then
+  # Branch exists locally; just attach it to a new worktree
+  git worktree add "$dest_dir" "$branch"
+else
+  # Branch does not exist locally; pick a sensible start point
+  track_flag=""
+  if [[ -n "$start_point" ]]; then
+    sp="$start_point"
+  else
+    # Optionally fetch to ensure remotes are up to date
+    git fetch --all --prune --quiet || true
+    if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+      sp="origin/$branch"
+      track_flag="--track"
+    else
+      sp="HEAD"
+    fi
+  fi
+
+  git worktree add -b "$branch" ${track_flag:+$track_flag} "$dest_dir" "$sp"
+fi
+
+echo "Copying .env files..."
+# Copy all files specifically named ".env" (skip .git and node_modules trees while searching)
+while IFS= read -r -d '' env_path; do
+  rel="${env_path#"$repo_root"/}"
+  target="$dest_dir/$rel"
+  mkdir -p "$(dirname "$target")"
+  rsync -a "$env_path" "$target"
+  echo "  .env -> $rel"
+done < <(find "$repo_root" \
+          -type d -name .git -prune -o \
+          -path '*/node_modules/*' -prune -o \
+          -type f -name .env -print0)
+
+echo "Copying node_modules directories (this may take a while)..."
+# Copy every top-level directory named node_modules (any depth), no recursion into them during discovery
+while IFS= read -r -d '' nm_path; do
+  rel="${nm_path#"$repo_root"/}"
+  target="$dest_dir/$rel"
+  mkdir -p "$target"
+  # Trailing slashes ensure rsync copies directory contents into target directory
+  rsync -a "$nm_path/" "$target/"
+  echo "  node_modules -> $rel"
+done < <(find "$repo_root" -type d -name node_modules -prune -print0)
+
+echo "Done. New worktree: $dest_dir"
+echo "Next: cd \"$dest_dir\""
