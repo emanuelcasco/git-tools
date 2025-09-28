@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "gitstatus: not inside a Git repository" >&2
+  exit 1
+fi
+
+RESET="\033[0m"
+BOLD="\033[1m"
+PURPLE="\033[38;5;141m"
+MAGENTA="\033[38;5;207m"
+GREEN="\033[38;5;114m"
+LIGHT_GREEN="\033[38;5;120m"
+RED="\033[38;5;210m"
+GOLD="\033[38;5;178m"
+ORANGE="\033[38;5;214m"
+CYAN="\033[38;5;110m"
+GRAY="\033[38;5;246m"
+WHITE="\033[97m"
+
+remote_icon="∗"
+head_icon="◉"
+arrow_down="↓"
+arrow_up="↑"
+arrow_hook="↪"
+bullet="⏺︎"
+plus="+"
+
+if current_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null); then
+  branch_display=$current_branch
+else
+  sha=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  branch_display="detached (${sha})"
+fi
+
+if git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+  upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u})
+else
+  upstream="(no upstream)"
+fi
+
+behind=0
+ahead=0
+if [ "$upstream" != "(no upstream)" ]; then
+  read -r behind ahead < <(git rev-list --left-right --count "@{u}...HEAD")
+fi
+
+remote_hint=""
+if [ "$behind" -gt 0 ]; then
+  remote_hint=" ${CYAN}(git pull)${RESET}"
+fi
+head_hint=""
+if [ "$ahead" -gt 0 ]; then
+  head_hint=" ${CYAN}(git push)${RESET}"
+fi
+
+top_line() {
+  local label=$1
+  local icon=$2
+  local count=$3
+  local arrow=$4
+  local count_color=$5
+  local branch_color=$6
+  local branch_name=$7
+  local hint=$8
+
+  printf "%b%s %s%b [%b%s%b %b%d%b] %b|%b %b%s%b%b\n" \
+    "$PURPLE" "$icon" "$label" "$RESET" \
+    "$count_color" "$arrow" "$RESET" "$WHITE" "$count" "$RESET" \
+    "$RESET" "$RESET" "$branch_color" "$branch_name" "$RESET" "$hint"
+}
+
+remote_count_color=$RED
+if [ "$upstream" = "(no upstream)" ]; then
+  top_line "Remote:" "$remote_icon" 0 "$arrow_down" "$remote_count_color" "$LIGHT_GREEN" "$upstream" ""
+else
+  top_line "Remote:" "$remote_icon" "$behind" "$arrow_down" "$remote_count_color" "$LIGHT_GREEN" "$upstream" "$remote_hint"
+fi
+
+top_line "HEAD:" "$head_icon" "$ahead" "$arrow_up" "$GREEN" "$PURPLE" "$branch_display" "$head_hint"
+
+printf "%b%s%b\n" "$GRAY" "────────────────────────────────────────────" "$RESET"
+
+count_lines() {
+  local text=$1
+  if [ -z "$text" ]; then
+    echo 0
+  else
+    printf "%s" "$text" | grep -c "."
+  fi
+}
+
+print_category() {
+  local label=$1
+  local count=$2
+  local icon=$3
+  local color=$4
+  local hint=$5
+  local list=$6
+
+  printf "%b%s%b %s (%d) %b|%b %s\n" "$color" "$icon" "$RESET" "$label" "$count" "$RESET" "$RESET" "$hint"
+  if [ "$count" -gt 0 ]; then
+    printf "%s\n" "$list" | while IFS= read -r file; do
+      [ -z "$file" ] && continue
+      printf "  %b%s%b %b%s%b\n" "$GRAY" "$arrow_hook" "$RESET" "$WHITE" "$file" "$RESET"
+    done
+  fi
+}
+
+staged_files=$(git diff --cached --name-only)
+unstaged_files=$(git diff --name-only)
+untracked_files=$(git ls-files --others --exclude-standard)
+
+staged_count=$(count_lines "$staged_files")
+unstaged_count=$(count_lines "$unstaged_files")
+untracked_count=$(count_lines "$untracked_files")
+
+print_category "Staged changes" "$staged_count" "$plus" "$GREEN" "(gc | git restore --staged)" "$staged_files"
+print_category "Unstaged changes" "$unstaged_count" "$bullet" "$ORANGE" "(ga | git restore)" "$unstaged_files"
+print_category "Untracked" "$untracked_count" "$bullet" "$MAGENTA" "(ga)" "$untracked_files"
+
+printf "\n%bRecent commits%b\n" "$BOLD" "$RESET"
+if git rev-parse --quiet --verify HEAD >/dev/null 2>&1; then
+  GIT_PAGER=cat git log --graph --decorate --color=always -n 8 \
+    --pretty="format:%C(yellow)%h%C(reset) %s %C(auto)%d%C(reset)"
+else
+  printf "%b(no commits yet)%b\n" "$GRAY" "$RESET"
+fi
+
+if [ "$behind" -gt 0 ] && [ "$upstream" != "(no upstream)" ]; then
+  printf "\n%bRemote ahead commits (%d)%b\n" "$BOLD" "$behind" "$RESET"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    hash=${line%% *}
+    message=${line#* }
+    if [ "$hash" = "$line" ]; then
+      message=""
+    fi
+    printf "  %b%s%b %b%s%b %s\n" "$RED" "$bullet" "$RESET" "$GOLD" "$hash" "$RESET" "$message"
+  done < <(git log --oneline HEAD..@{u})
+fi
