@@ -5,7 +5,10 @@ A lightweight toolkit of Bash helpers that streamline daily Git workflows. Each 
 ## Getting Started
 
 1. Clone or copy this directory somewhere on your machine.
-2. Add the directory to your `PATH`, or symlink the scripts you need:
+
+2. Make sure the scripts are executable, run `chmod +x git-status git-gwts`.
+
+3. Add the directory to your `PATH`, or symlink the scripts you need:
    ```bash
    ln -s "$(pwd)/git-status" /usr/local/bin/gitstatus
    ln -s "$(pwd)/git-gwts" /usr/local/bin/git-gwts
@@ -17,13 +20,6 @@ A lightweight toolkit of Bash helpers that streamline daily Git workflows. Each 
    source ~/.zshrc  # reload your shell config
    ```
 
-3. Make sure the prerequisites are available:
-   - `bash`
-   - `git`
-   - `rsync` and `find` (for the worktree helper)
-
-> Tip: run `chmod +x git-status git-gwts` if you copied the files manually.
-
 ## Tools
 
 ### `git-status`
@@ -32,6 +28,8 @@ Rich terminal status for any Git repository. Highlights remote vs. local diverge
 
 - Command: `gitstatus`
 - Docs: `git-status-tool.spec.md`
+
+![Comparison gitstatus vs plain git status](./assets/git-status.png)
 
 ### `git-gwts`
 
